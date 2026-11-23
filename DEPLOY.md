@@ -116,6 +116,15 @@ project has billing, set a budget alert.
   `data/demo/` and push. Changing `CACHE_SCHEMA_VERSION` (`gee/extract.py`) or `PLAN_VERSION`
   (`app_core/plan.py`) invalidates old files, so re-export after either change.
 
+## 6. GitHub repository page (optional)
+
+On the repository page, click the ⚙ next to **About** and fill in:
+
+- **Description:** `Prescriptive urban tree planting: 30 m land-surface temperature from Landsat, monotonic gradient boosting and a lazy-greedy optimizer, with a cross-model robustness audit.`
+- **Website:** the Streamlit Community Cloud URL, once deployed.
+- **Topics:** `urban-heat-island`, `remote-sensing`, `google-earth-engine`, `landsat`, `geospatial`,
+  `climate-adaptation`, `urban-forestry`, `optimization`, `scikit-learn`, `streamlit`.
+
 ## Verification
 
 Before writing this guide, the repository was checked as follows:
