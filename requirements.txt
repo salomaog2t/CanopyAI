@@ -7,3 +7,6 @@ numpy>=1.26
 pandas>=2.1
 pyarrow>=15
 scipy>=1.11
+
+# Passo 3 — modelos de LST e otimização (sem PyTorch: o disco C: é limitado)
+scikit-learn>=1.4

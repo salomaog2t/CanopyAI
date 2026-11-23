@@ -1,0 +1,1 @@
+"""Alocação espacial de árvores."""
