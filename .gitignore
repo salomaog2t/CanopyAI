@@ -1,0 +1,36 @@
+# --- Secrets / credentials ---
+.env
+.env.*
+!.env.example
+*.json.key
+service-account*.json
+credentials*.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+
+# --- Data & outputs (large rasters / exports never go to git) ---
+data/raw/
+data/interim/
+outputs/
+*.tif
+*.tiff
+*.nc
+*.zarr/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
