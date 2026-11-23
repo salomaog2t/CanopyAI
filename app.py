@@ -100,6 +100,9 @@ st.markdown(
         background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px;
         padding: 14px 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
       }
+      div[data-testid="stMetricLabel"], div[data-testid="stMetricLabel"] * {
+        white-space: normal !important; overflow: visible !important; text-overflow: clip !important;
+      }
       div[data-testid="stMetricLabel"] p {
         font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #64748B;
       }
@@ -159,7 +162,7 @@ def overlay(cache_key, layer, _values, _meta, vmin, vmax, stops, transparent_bel
 def base_map(bounds_latlon) -> folium.Map:
     lon_min, lat_min, lon_max, lat_max = bounds_latlon
     m = folium.Map(location=[(lat_min + lat_max) / 2, (lon_min + lon_max) / 2], tiles=None,
-                   control_scale=True, prefer_canvas=True)
+                   control_scale=True, prefer_canvas=True, zoom_control="bottomright")
     folium.TileLayer(LIGHT_GRAY, attr=LIGHT_GRAY_ATTR, name="Light basemap", max_native_zoom=16, max_zoom=19,
                      show=True).add_to(m)
     folium.TileLayer("OpenStreetMap", name="Streets", show=False).add_to(m)
@@ -173,6 +176,8 @@ def add_raster(m, rgba, bounds, name, show=True):
                                       interactive=False, zindex=2).add_to(m)
 
 
+LEGEND_WIDTH = 290  # px; fits a map column on a ~1200 px wide window
+
 LEGEND_CSS = """
 <style>
   /* branca draws the colour bar inside <div class="legend leaflet-control">; the white card keeps
@@ -183,6 +188,7 @@ LEGEND_CSS = """
     border-radius: 6px;
   }
   .legend.leaflet-control text.caption { font-weight: 600; }
+  .leaflet-control-attribution { font-size: 10px; line-height: 1.3; }
 </style>
 """
 
@@ -216,7 +222,9 @@ class LegendPolish(MacroElement):
 
 def legend(m, stops, vmin, vmax, caption):
     m.get_root().header.add_child(folium.Element(LEGEND_CSS))
-    LinearColormap(stops, vmin=vmin, vmax=vmax, caption=caption).add_to(m)
+    cmap = LinearColormap(stops, vmin=vmin, vmax=vmax, caption=caption, max_labels=6)
+    cmap.width = LEGEND_WIDTH  # branca's default is 450 px, wider than a half-page map
+    cmap.add_to(m)
     LegendPolish().add_to(m)
 
 
@@ -387,11 +395,13 @@ st.subheader(area_label)
 a1, a2, a3, a4, a5 = st.columns(5)
 a1.metric("Area", f"{grid.shape[0] * grid.shape[1] * grid.scale_m ** 2 / 1e6:.0f} km²")
 a2.metric("30 m cells", f"{grid.shape[0] * grid.shape[1]:,}")
-a3.metric("Median LST", f"{area.lst_median:.1f} °C",
-          help=f"Median {months[0]:02d}–{months[1]:02d} land-surface temperature, {years[0]}–{years[1]}, "
-               f"{grid.meta['n_scenes']} Landsat scenes.")
+a3.metric("Median LST", f"{area.lst_median:.1f} °C")
 a4.metric("Tree cover", f"{df.loc[land, 'tree_frac'].mean():.0%}")
-a5.metric("Residents (WorldPop)", f"{df['population'].sum():,.0f}" if "population" in df else "—")
+a5.metric("Residents", f"{df['population'].sum():,.0f}" if "population" in df else "—")
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+st.caption(f"Median {MONTHS[months[0] - 1]}–{MONTHS[months[1] - 1]} land-surface temperature, "
+           f"{years[0]}–{years[1]}, from {grid.meta['n_scenes']} Landsat scenes · tree cover on land cells "
+           "(ESA WorldCover) · residents from WorldPop 2025.")
 
 # ---------------------------------------------------------------------------
 # Plan
@@ -417,14 +427,15 @@ if result:
     g, r, h = (m[s][metric_key] for s in STRATEGIES)
     st.markdown("#### Optimized plan")
     b1, b2, b3, b4, b5 = st.columns(5)
-    b1.metric("Objective (Lazy Greedy)", f"{g:,.0f} {unit}",
-              help="Sum of predicted LST reduction over all 30 m cells"
-                   + (", weighted by residents." if objective == "population" else "."))
-    b2.metric("vs random planting", fmt_ratio(g, r), f"{(g / r - 1):+.0%}" if r > 0 else None)
+    b1.metric("Σ people·ΔLST" if objective == "population" else "Σ ΔLST", f"{g:,.0f}")
+    b2.metric("vs random", fmt_ratio(g, r), f"{(g / r - 1):+.0%}" if r > 0 else None)
     b3.metric("vs hottest-first", fmt_ratio(g, h), f"{(g / h - 1):+.0%}" if h > 0 else None)
-    b4.metric("Cells planted", f"{m['Lazy Greedy']['celulas_plantadas']:,}",
-              help=f"{result['budget_used']:,} trees placed.")
-    b5.metric("Peak local cooling", f"{m['Lazy Greedy']['dT_max']:.2f} °C")
+    b4.metric("Cells planted", f"{m['Lazy Greedy']['celulas_plantadas']:,}")
+    b5.metric("Peak cooling", f"{m['Lazy Greedy']['dT_max']:.2f} °C")
+    st.caption(f"Σ ΔLST = predicted LST reduction summed over all 30 m cells, in {unit}"
+               + (" (each cell weighted by its residents)" if objective == "population" else "")
+               + f" · {result['budget_used']:,} trees placed · ratios compare the lazy-greedy plan with each "
+               "baseline under the same model.")
     if result["budget_used"] < budget:
         st.warning(f"Only {result['budget_used']:,} trees fit in the plantable area "
                    f"(capacity {result['capacity_total']:,}).")
@@ -507,34 +518,43 @@ with tab_cmp:
             for s in STRATEGIES
         ])
         c1, c2 = st.columns([1, 1])
+        c1.markdown("##### Total objective by strategy")
+        c2.markdown("##### Cumulative objective vs. trees planted")
+        chart_cfg = dict(height=260, padding={"left": 20, "right": 12, "top": 8, "bottom": 4},
+                         autosize=alt.AutoSizeParams(type="fit", contains="padding"))
         bars = alt.Chart(comp).mark_bar(cornerRadiusEnd=4).encode(
-            x=alt.X("Objective:Q", title=f"Objective ({unit})"),
-            y=alt.Y("Strategy:N", sort=list(STRATEGIES), title=None),
+            x=alt.X("Objective:Q", title=unit, axis=alt.Axis(format="~s", tickCount=4)),
+            y=alt.Y("Strategy:N", sort=list(STRATEGIES), title=None, axis=alt.Axis(labelLimit=200)),
             color=alt.Color("Strategy:N", scale=alt.Scale(domain=list(STRATEGY_COLORS),
                                                           range=list(STRATEGY_COLORS.values())), legend=None),
             tooltip=["Strategy", alt.Tooltip("Objective:Q", format=",.0f")],
-        ).properties(height=200, title="Total objective by strategy")
+        ).properties(**chart_cfg)
         c1.altair_chart(bars.configure(font="Inter").configure_view(stroke=None), width="stretch")
 
         hist = pd.DataFrame(result["history"], columns=["Trees", "Objective"])
-        lines = [hist.assign(Strategy="Lazy Greedy")]
+        lines = [hist.assign(Strategy="Lazy Greedy", Kind="Lazy greedy (actual path)")]
         n = result["budget_used"]
         for s in ("Random", "Hottest first"):
-            lines.append(pd.DataFrame({"Trees": [0, n], "Objective": [0, m[s][metric_key]], "Strategy": s}))
+            lines.append(pd.DataFrame({"Trees": [0, n], "Objective": [0, m[s][metric_key]], "Strategy": s,
+                                       "Kind": "baseline (average rate)"}))
         curve = alt.Chart(pd.concat(lines)).mark_line().encode(
-            x=alt.X("Trees:Q", title="Trees planted"),
-            y=alt.Y("Objective:Q", title=f"Cumulative objective ({unit})"),
+            x=alt.X("Trees:Q", title="Trees planted", axis=alt.Axis(format="~s", tickCount=5)),
+            y=alt.Y("Objective:Q", title=unit, axis=alt.Axis(format="~s")),
             color=alt.Color("Strategy:N", scale=alt.Scale(domain=list(STRATEGY_COLORS),
-                                                          range=list(STRATEGY_COLORS.values()))),
-            strokeDash=alt.condition(alt.datum.Strategy == "Lazy Greedy", alt.value([1, 0]), alt.value([5, 4])),
-        ).properties(height=200, title="Diminishing returns (baselines shown as their average rate)")
+                                                          range=list(STRATEGY_COLORS.values())),
+                            legend=alt.Legend(orient="top-left", title=None, fillColor="#FFFFFFE6",
+                                              padding=6, labelFontSize=11)),
+            strokeDash=alt.StrokeDash("Kind:N", legend=None,
+                                      scale=alt.Scale(domain=["Lazy greedy (actual path)", "baseline (average rate)"],
+                                                      range=[[1, 0], [5, 4]])),
+        ).properties(**chart_cfg)
         c2.altair_chart(curve.configure(font="Inter").configure_view(stroke=None), width="stretch")
         st.dataframe(comp.style.format({"Objective": "{:,.0f}", "Σ ΔLST (°C·cell)": "{:,.0f}",
                                         "Mean ΔLST over area (m°C)": "{:.1f}", "Peak cooling (°C)": "{:.2f}",
                                         "Cells ≥ 0.1 °C cooler": "{:,.0f}", "Cells planted": "{:,.0f}"}),
                      hide_index=True, width="stretch")
         rsd = m["Random"].get("soma_dT_sd", 0.0)
-        st.caption(f"Random = mean of {params.n_random} draws (Σ ΔLST sd {rsd:,.0f}). "
+        st.caption(f"Dashed lines: baselines drawn at their average rate (only their end point is computed). Random = mean of {params.n_random} draws (Σ ΔLST sd {rsd:,.0f}). "
                    f"Greedy evaluated {result['n_evaluations']:,} candidate moves; "
                    f"computed in {result['runtime_s']:.0f} s"
                    + (" (loaded from cache)." if result.get("from_cache") else "."))
