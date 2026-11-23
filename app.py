@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 from branca.colormap import LinearColormap
+from branca.element import MacroElement, Template
 from dotenv import load_dotenv
 from folium.plugins import Draw
 from streamlit_folium import st_folium
@@ -66,13 +67,62 @@ TREE_STOPS = ["#f7fcf5", "#c7e9c0", "#74c476", "#238b45", "#00441b"]
 STRATEGY_COLORS = {"Lazy Greedy": "#1b7837", "Random": "#9e9e9e", "Hottest first": "#d6604d"}
 MAP_HEIGHT = 520
 SATELLITE = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+# Free, key-less light basemap (Esri World Light Gray Canvas); native tiles stop at zoom 16
+LIGHT_GRAY = "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+LIGHT_GRAY_ATTR = "Esri, HERE, Garmin, © OpenStreetMap contributors"
 
 st.markdown(
     """
     <style>
-      .block-container {padding-top: 2rem; padding-bottom: 2rem;}
-      div[data-testid="stMetricValue"] {font-size: 1.55rem;}
-      .small-note {color: #6b7280; font-size: 0.85rem;}
+      @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap');
+
+      /* Inter on text elements only: a blanket selector would also replace the Material Symbols
+         font that Streamlit uses for its icons (sidebar chevrons, expander arrows) */
+      html, body, .stApp, p, li, label, input, textarea, select, button p,
+      .stMarkdown, [data-testid="stCaptionContainer"], [data-baseweb="select"] div,
+      [data-testid="stWidgetLabel"], [data-testid="stSidebar"] p, [data-testid="stSidebar"] label {
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      }
+      [data-testid="stIconMaterial"], span[class*="material"], .material-symbols-rounded {
+        font-family: 'Material Symbols Rounded' !important;
+      }
+      h1, h2, h3, h4, h5 { font-family: 'Inter', system-ui, sans-serif; letter-spacing: -0.02em; color: #0F172A; }
+      h1 { font-weight: 700; }
+      .block-container { padding-top: 2.2rem; padding-bottom: 2.5rem; max-width: 1500px; }
+
+      /* Streamlit chrome off: this is a product page, not a dev server */
+      #MainMenu, footer, header [data-testid="stToolbar"], [data-testid="stDeployButton"],
+      [data-testid="stStatusWidget"] { visibility: hidden; height: 0; }
+      header[data-testid="stHeader"] { background: transparent; }
+
+      /* KPI cards */
+      div[data-testid="stMetric"] {
+        background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px;
+        padding: 14px 16px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      }
+      div[data-testid="stMetricLabel"] p {
+        font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: #64748B;
+      }
+      div[data-testid="stMetricValue"] {
+        font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 1.45rem; font-weight: 600; color: #0F172A;
+      }
+      div[data-testid="stMetricDelta"] { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 0.8rem; }
+
+      /* hero */
+      .eyebrow { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+                 color: #0F766E; margin-bottom: -0.4rem; }
+      .lede { color: #475569; font-size: 1.02rem; line-height: 1.6; max-width: 900px; }
+      .section-label { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+                       color: #64748B; margin: 0.6rem 0 0.3rem 0; }
+
+      /* sidebar */
+      [data-testid="stSidebar"] { border-right: 1px solid #E2E8F0; }
+      [data-testid="stSidebar"] h1 { font-size: 1.35rem; }
+      [data-testid="stSidebar"] h2 { font-size: 0.78rem; font-weight: 600; text-transform: uppercase;
+                                     letter-spacing: 0.08em; color: #64748B; margin-top: 0.8rem; }
+
+      /* tabs */
+      button[data-baseweb="tab"] p { font-weight: 500; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -110,8 +160,10 @@ def base_map(bounds_latlon) -> folium.Map:
     lon_min, lat_min, lon_max, lat_max = bounds_latlon
     m = folium.Map(location=[(lat_min + lat_max) / 2, (lon_min + lon_max) / 2], tiles=None,
                    control_scale=True, prefer_canvas=True)
-    folium.TileLayer("CartoDB positron", name="Light basemap").add_to(m)
-    folium.TileLayer(SATELLITE, attr="Esri World Imagery", name="Satellite").add_to(m)
+    folium.TileLayer(LIGHT_GRAY, attr=LIGHT_GRAY_ATTR, name="Light basemap", max_native_zoom=16, max_zoom=19,
+                     show=True).add_to(m)
+    folium.TileLayer("OpenStreetMap", name="Streets", show=False).add_to(m)
+    folium.TileLayer(SATELLITE, attr="Esri World Imagery", name="Satellite", show=False).add_to(m)
     m.fit_bounds([[lat_min, lon_min], [lat_max, lon_max]])
     return m
 
@@ -130,13 +182,42 @@ LEGEND_CSS = """
     padding: 6px 10px;
     border-radius: 6px;
   }
+  .legend.leaflet-control text.caption { font-weight: 600; }
 </style>
 """
+
+class LegendPolish(MacroElement):
+    """
+    Runs right after branca's legend script (it is added to the map after the colormap, so its script
+    comes later in the same block). branca's caption is an SVG <text> with no x, so it sits at the left
+    of the colour bar; the bar spans [0, width − 50] inside a group translated by 25 px, so the caption
+    is centred on it. The white card is also set inline, in case the page <head> CSS is not carried
+    into the streamlit-folium component.
+    """
+
+    _template = Template("""
+        {% macro script(this, kwargs) %}
+        document.querySelectorAll(".legend.leaflet-control").forEach(function (box) {
+            box.style.backgroundColor = "rgba(255, 255, 255, 0.88)";
+            box.style.padding = "6px 10px";
+            box.style.borderRadius = "6px";
+            box.querySelectorAll("svg").forEach(function (svg) {
+                var w = parseFloat(svg.getAttribute("width")) || 450;
+                svg.querySelectorAll("text.caption").forEach(function (t) {
+                    t.setAttribute("x", (w - 50) / 2);
+                    t.setAttribute("text-anchor", "middle");
+                    t.style.fontWeight = "600";
+                });
+            });
+        });
+        {% endmacro %}
+    """)
 
 
 def legend(m, stops, vmin, vmax, caption):
     m.get_root().header.add_child(folium.Element(LEGEND_CSS))
     LinearColormap(stops, vmin=vmin, vmax=vmax, caption=caption).add_to(m)
+    LegendPolish().add_to(m)
 
 
 def bbox_from_drawing(drawing) -> tuple[float, float, float, float] | None:
@@ -155,12 +236,13 @@ def fmt_ratio(a, b):
 # Sidebar
 # ---------------------------------------------------------------------------
 st.sidebar.title("🌳 CanopyAI")
-st.sidebar.caption("Prescriptive urban tree planting with satellite data and optimization.")
+st.sidebar.caption("Prescriptive tree planting for urban heat")
 
-st.sidebar.header("1 · Study area")
-source = st.sidebar.radio("Area source", ["Preloaded city", "Custom area"], horizontal=True,
-                          help="Preloaded cities are cached on disk and open instantly. "
-                               "Custom areas are downloaded from Google Earth Engine.")
+st.sidebar.header("Study area")
+SOURCE_LABELS = {"Preloaded city": "Demo city", "Custom area": "Draw area"}
+source = st.sidebar.radio("Source", list(SOURCE_LABELS), horizontal=True, format_func=SOURCE_LABELS.get,
+                          help="Demo cities are cached and open instantly. "
+                               "Drawn areas are downloaded from Google Earth Engine.")
 
 bbox = years = months = None
 area_label = ""
@@ -174,9 +256,9 @@ if source == "Preloaded city":
     else:
         st.sidebar.warning("This city is not cached yet. Run `python scripts/precache_cities.py`.")
 else:
-    st.sidebar.caption(f"Draw a rectangle on the map (max {MAX_CUSTOM_AREA_KM2:.0f} km²).")
+    st.sidebar.caption(f"Draw a rectangle on the map · max {MAX_CUSTOM_AREA_KM2:.0f} km²")
     season = st.sidebar.select_slider(
-        "Season months", options=list(range(1, 13)), value=(6, 9),
+        "Season", options=list(range(1, 13)), value=(6, 9),
         format_func=lambda m: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][m - 1],
         help="Months used for the median Landsat composite. Pick a dry, low-cloud season.",
     )
@@ -185,43 +267,44 @@ else:
         bbox, years, months = custom["bbox"], (2022, 2025), custom["months"]
         area_label = f"Custom area {bbox}"
 
-st.sidebar.header("2 · Planting scenario")
-budget = st.sidebar.slider("Tree budget (N)", 500, 20000, 5000, step=500,
-                           help="Number of new trees to allocate.")
-canopy = st.sidebar.slider("Mature canopy area per tree (m²)", 20, 120, 50, step=5,
-                           help="50 m² ≈ an 8 m crown diameter.")
+st.sidebar.header("Scenario")
+budget = st.sidebar.slider("Trees", 500, 20000, 5000, step=500,
+                           help="Number of new trees to allocate (N).")
+canopy = st.sidebar.slider("Crown area · m²", 20, 120, 50, step=5,
+                           help="Mature canopy area per tree. 50 m² ≈ an 8 m crown diameter.")
+OBJECTIVE_LABELS = {"Total cooling (Σ ΔLST)": "Total cooling", "Population exposure (WorldPop)": "People-weighted"}
 objective_label = st.sidebar.radio(
-    "Optimization objective",
-    ["Total cooling (Σ ΔLST)", "Population exposure (WorldPop)"],
-    help="Total cooling sums the predicted temperature drop over every 30 m cell. "
-         "Population exposure weights each cell by its WorldPop residents (person·°C).",
+    "Objective", list(OBJECTIVE_LABELS), horizontal=True, format_func=OBJECTIVE_LABELS.get,
+    help="Total cooling sums the predicted temperature drop (Σ ΔLST) over every 30 m cell. "
+         "People-weighted multiplies each cell by its WorldPop residents (person·°C).",
 )
 objective = "population" if objective_label.startswith("Population") else "cooling"
 with st.sidebar.expander("Advanced"):
-    street_share = st.slider("Plantable share of built-up land", 0.0, 0.4, 0.15, step=0.05,
+    street_share = st.slider("Plantable built-up share", 0.0, 0.4, 0.15, step=0.05,
                              help="Sidewalks, medians and parking lots inside 'built-up' cells where a tree can fit.")
-    step = st.slider("Trees per greedy move", 1, 10, 5)
+    step = st.slider("Trees per move", 1, 10, 5, help="Granularity of the lazy-greedy optimizer.")
     pool = st.select_slider("Candidate pool", options=[2000, 4000, 6000, 8000, 12000], value=6000,
                             help="Half chosen by a linear screen, half sampled at random; larger is slower but better.")
 params = PlanParams(budget=budget, canopy_area_m2=float(canopy), objective=objective, street_share=street_share,
                     step=step, pool=pool // 2, explore=pool // 2)
-run_clicked = st.sidebar.button("Optimize planting plan", type="primary", width="stretch",
-                                disabled=bbox is None)
+run_clicked = st.sidebar.button("Run optimizer", type="primary", width="stretch", disabled=bbox is None)
 
 st.sidebar.divider()
 st.sidebar.caption(
-    "Data: Landsat 8/9 C2 L2 (LST, NDVI, NDBI) · ESA WorldCover v200 · SRTM · WorldPop 2025, "
-    "via Google Earth Engine. Model: monotonic gradient boosting (scikit-learn)."
+    "Landsat 8/9 · ESA WorldCover · SRTM · WorldPop 2025 via Google Earth Engine  \n"
+    "Monotonic gradient boosting · lazy-greedy allocation"
 )
 
 # ---------------------------------------------------------------------------
 # Header
 # ---------------------------------------------------------------------------
+st.markdown('<p class="eyebrow">Urban heat · Prescriptive planning</p>', unsafe_allow_html=True)
 st.title("Where should a city plant its next trees?")
 st.markdown(
-    "CanopyAI predicts **land-surface temperature (LST)** at 30 m from satellite data, then uses a "
-    "**lazy-greedy optimizer** to place a tree budget where it cools the most — and compares the plan "
-    "against random planting and a naive *hottest-first* rule."
+    '<p class="lede">CanopyAI predicts <b>land-surface temperature</b> at 30 m from satellite data, then '
+    "places a tree budget where it cools the most with a <b>lazy-greedy optimizer</b>, and benchmarks the "
+    "plan against random planting and a naive <i>hottest-first</i> rule.</p>",
+    unsafe_allow_html=True,
 )
 
 # ---------------------------------------------------------------------------
@@ -231,7 +314,9 @@ if source == "Custom area":
     st.subheader("Select a study area")
     prev = st.session_state.get("custom_bbox", {}).get("bbox")
     center = [((prev[1] + prev[3]) / 2), ((prev[0] + prev[2]) / 2)] if prev else [-23.57, -46.66]
-    pick = folium.Map(location=center, zoom_start=12, tiles="CartoDB positron", control_scale=True)
+    pick = folium.Map(location=center, zoom_start=12, tiles=None, control_scale=True)
+    folium.TileLayer(LIGHT_GRAY, attr=LIGHT_GRAY_ATTR, name="Light basemap", max_native_zoom=16,
+                     max_zoom=19).add_to(pick)
     Draw(draw_options={"rectangle": {"shapeOptions": {"color": "#1b7837"}}, "polyline": False, "polygon": False,
                        "circle": False, "marker": False, "circlemarker": False},
          edit_options={"edit": False}).add_to(pick)
@@ -344,7 +429,7 @@ if result:
         st.warning(f"Only {result['budget_used']:,} trees fit in the plantable area "
                    f"(capacity {result['capacity_total']:,}).")
 else:
-    st.info("Adjust the scenario in the sidebar and click **Optimize planting plan**. "
+    st.info("Adjust the scenario in the sidebar and click **Run optimizer**. "
             "New scenarios take about 1–2 minutes; the default scenario of each preloaded city is cached.")
 
 # ---------------------------------------------------------------------------
@@ -429,7 +514,7 @@ with tab_cmp:
                                                           range=list(STRATEGY_COLORS.values())), legend=None),
             tooltip=["Strategy", alt.Tooltip("Objective:Q", format=",.0f")],
         ).properties(height=200, title="Total objective by strategy")
-        c1.altair_chart(bars, width="stretch")
+        c1.altair_chart(bars.configure(font="Inter").configure_view(stroke=None), width="stretch")
 
         hist = pd.DataFrame(result["history"], columns=["Trees", "Objective"])
         lines = [hist.assign(Strategy="Lazy Greedy")]
@@ -443,7 +528,7 @@ with tab_cmp:
                                                           range=list(STRATEGY_COLORS.values()))),
             strokeDash=alt.condition(alt.datum.Strategy == "Lazy Greedy", alt.value([1, 0]), alt.value([5, 4])),
         ).properties(height=200, title="Diminishing returns (baselines shown as their average rate)")
-        c2.altair_chart(curve, width="stretch")
+        c2.altair_chart(curve.configure(font="Inter").configure_view(stroke=None), width="stretch")
         st.dataframe(comp.style.format({"Objective": "{:,.0f}", "Σ ΔLST (°C·cell)": "{:,.0f}",
                                         "Mean ΔLST over area (m°C)": "{:.1f}", "Peak cooling (°C)": "{:.2f}",
                                         "Cells ≥ 0.1 °C cooler": "{:,.0f}", "Cells planted": "{:,.0f}"}),
