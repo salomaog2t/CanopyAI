@@ -28,7 +28,8 @@ Uma ação = adicionar até `step` árvores numa célula. O ganho de uma ação 
 todas as células afetadas (o disco de 600 m em volta dela); a fila ordena pelo ganho por árvore. Como as médias de vizinhança são
 lineares, o efeito numa célula i é Δ·k(i−j)/den(i) — atualização local exata, sem reconvoluir a
 grade. A fila de prioridade guarda o último ganho conhecido de cada ação; ao sair do topo, uma
-ação desatualizada é reavaliada e volta para a fila, e só é aceita se continuar no topo.
+ação desatualizada é reavaliada e volta para a fila, e só é aceita se continuar no topo. Uma ação
+só fica desatualizada se outra foi aceita a até 2 × 600 m dela (invalidação local e exata).
 
 Observação honesta: com um modelo de árvores (HGB) o ganho não é submodular, então o guloso
 preguiçoso é uma heurística — boa, mas sem a garantia (1 − 1/e) do caso submodular.
@@ -68,6 +69,7 @@ class AllocationResult:
     n_evaluations: int = 0
     pool_size: int = 0
     fallback_trees: int = 0            # árvores colocadas sem avaliação (ganho exato zerou)
+    history: list | None = None        # [(árvores colocadas, objetivo acumulado)] do guloso
 
 
 class AllocationProblem:
@@ -82,7 +84,12 @@ class AllocationProblem:
         params: InterventionParams = InterventionParams(),
         pixel_m: float = 30.0,
         radii_m=DEFAULT_RADII_M,
+        weights: np.ndarray | None = None,
     ):
+        """
+        weights: peso de cada célula no objetivo (p.ex. população WorldPop). None = 1 em todas,
+        ou seja, maximiza Σ ΔT; com população, maximiza a exposição evitada Σ pessoas·ΔT.
+        """
         self.shape = shape
         self.H, self.W = shape
         self.model = model
@@ -104,6 +111,9 @@ class AllocationProblem:
         X = feat_df[self.features].to_numpy(np.float64)
         land = np.isfinite(water) & (water < DEFAULT_WATER_THRESHOLD)
         self.eval_mask = land & np.isfinite(X).all(axis=1)
+        w = np.ones(len(X)) if weights is None else np.nan_to_num(np.asarray(weights, dtype=np.float64).ravel())
+        self.w = np.where(self.eval_mask, np.maximum(w, 0.0), 0.0)
+        self.weighted = weights is not None
         plantable = np.nan_to_num(self.other0 + self.street0)
         self.capacity = np.where(
             self.eval_mask, np.floor(plantable * self.cell_area / params.canopy_area_m2 + 1e-9), 0
@@ -134,6 +144,7 @@ class AllocationProblem:
         self.in_r = {r: d2[keep] <= (r / pixel_m) ** 2 + 1e-9 for r in self.radii}
         self.center = int(np.flatnonzero((self.dy == 0) & (self.dx == 0))[0])
 
+        self.thresholds = _split_thresholds(model, len(self.features))
         self.X0 = X
         self.base_pred = np.full(len(X), np.nan)
         self.base_pred[self.eval_mask] = model.predict(X[self.eval_mask])
@@ -178,17 +189,36 @@ class AllocationProblem:
             Xn[inside, q] += delta[c] / self.den[(c, r)][idx[inside]]
         return idx, Xn
 
+    def _rows_that_change(self, idx, Xn) -> np.ndarray:
+        """
+        Linhas cuja previsão PODE mudar. Num modelo de árvores, a previsão de uma linha só muda se
+        alguma feature cruza um limiar de divisão (x ≤ t). Sem cruzamento, todas as árvores levam a
+        linha às mesmas folhas e a previsão é idêntica — então pular essas linhas é exato.
+        """
+        if self.thresholds is None:
+            return np.ones(len(idx), dtype=bool)
+        old = self.X[idx]
+        changed = np.zeros(len(idx), dtype=bool)
+        for f in np.flatnonzero((old != Xn).any(axis=0)):
+            t = self.thresholds[f]
+            changed |= np.searchsorted(t, old[:, f]) != np.searchsorted(t, Xn[:, f])
+        return changed
+
     def local_gains(self, cells, adds):
         """Para cada (célula, nº de árvores): (ganho em °C·célula, idx, X novo, previsão nova)."""
         props = [self._proposal(j, a) for j, a in zip(cells, adds)]
         if not props:
             return []
-        pred = self.model.predict(np.vstack([X for _, X in props]))
+        masks = [self._rows_that_change(idx, Xn) for idx, Xn in props]
+        rows = [Xn[m] for (_, Xn), m in zip(props, masks)]
+        pred = self.model.predict(np.vstack(rows)) if sum(len(r) for r in rows) else np.empty(0)
         out, k = [], 0
-        for idx, Xn in props:
-            p = pred[k : k + len(idx)]
-            k += len(idx)
-            out.append((float((self.pred[idx] - p).sum()), idx, Xn, p))
+        for (idx, Xn), m in zip(props, masks):
+            p = self.pred[idx].copy()
+            n = int(m.sum())
+            p[m] = pred[k : k + n]
+            k += n
+            out.append((float((self.w[idx] * (self.pred[idx] - p)).sum()), idx, Xn, p))
         return out
 
     def commit(self, j: int, add: int, idx, Xn, pnew) -> None:
@@ -209,10 +239,10 @@ class AllocationProblem:
         t0, v0, b0 = self.pixel_values(cand, 0)
         t1, v1, b1 = self.pixel_values(cand, add)
         delta = {"tree_frac": t1 - t0, "NDVI": v1 - v0}
-        change = (t1 - t0) * coef[self.col["tree_frac"]] + (v1 - v0) * coef[self.col["NDVI"]] \
-            + (b1 - b0) * coef[self.col["built_frac"]]
+        change = self.w[cand] * ((t1 - t0) * coef[self.col["tree_frac"]] + (v1 - v0) * coef[self.col["NDVI"]]
+                                 + (b1 - b0) * coef[self.col["built_frac"]])
         for c, q, r in self.terms:
-            inv = np.where(self.eval_mask & (self.den[(c, r)] > 0), 1.0 / np.maximum(self.den[(c, r)], 1), 0.0)
+            inv = np.where(self.eval_mask & (self.den[(c, r)] > 0), self.w / np.maximum(self.den[(c, r)], 1), 0.0)
             spread = ndimage.convolve(inv.reshape(self.shape), disk_kernel(r, self.pixel_m), mode="constant").ravel()
             change += delta[c] * coef[q] * spread[cand]
         return cand, -change  # ganho = resfriamento
@@ -241,6 +271,7 @@ class AllocationProblem:
             "arvores": int(trees.sum()),
             "celulas_plantadas": int((trees > 0).sum()),
             "soma_dT": float(ev.sum()),
+            "soma_ponderada": float((self.w[self.eval_mask] * ev).sum()),
             "dT_medio_mC": 1000 * float(ev.mean()),
             "dT_max": float(ev.max()),
             "aquecimento_max": float(max(0.0, -ev.min())),
@@ -249,11 +280,30 @@ class AllocationProblem:
         }
 
 
+def _split_thresholds(model, n_features: int) -> list[np.ndarray] | None:
+    """Limiares de divisão ordenados, por feature, de um HistGradientBoosting (None para outros modelos)."""
+    predictors = getattr(model, "_predictors", None)
+    if predictors is None:
+        return None
+    feats, ths = [], []
+    for iteration in predictors:
+        for tree in iteration:
+            nodes = tree.nodes
+            internal = nodes["is_leaf"] == 0
+            if (nodes["is_categorical"][internal] != 0).any():
+                return None  # divisões categóricas não são limiares numéricos
+            feats.append(nodes["feature_idx"][internal])
+            ths.append(nodes["num_threshold"][internal])
+    feats, ths = np.concatenate(feats), np.concatenate(ths)
+    return [np.unique(ths[feats == f]) for f in range(n_features)]
+
+
 # ---------------------------------------------------------------------------
 # Estratégias
 # ---------------------------------------------------------------------------
 def lazy_greedy(problem: AllocationProblem, budget: int, step: int = 5, pool_size: int = 6000,
-                explore: int = 6000, batch: int = 64, seed: int = 0, verbose: bool = True) -> AllocationResult:
+                explore: int = 6000, batch: int = 64, reeval_batch: int = 16, seed: int = 0,
+                verbose: bool = True) -> AllocationResult:
     """
     A prioridade é o ganho POR ÁRVORE da ação (o orçamento é em árvores, e ações têm tamanhos
     diferentes: células com pouco espaço só recebem 1–2). Comparar o ganho total da ação
@@ -278,43 +328,78 @@ def lazy_greedy(problem: AllocationProblem, budget: int, step: int = 5, pool_siz
               f"({len(top):,} pelo substituto linear + {len(sampled):,} sorteadas; "
               f"capacidade {int(problem.capacity[pool].sum()):,} árvores)")
 
-    heap, n_eval, last = [], 0, {}
+    # Invalidação LOCAL (exata): aceitar uma ação em k muda features só a ≤ R_max de k, e o ganho de
+    # uma candidata j depende só de células a ≤ R_max de j. Logo, só candidatas a ≤ 2·R_max de k
+    # podem ter o ganho alterado; as demais continuam exatamente válidas e não são reavaliadas.
+    H, W = problem.shape
+    n2 = int(2 * max(problem.radii) // problem.pixel_m)
+    dy2, dx2 = np.mgrid[-n2 : n2 + 1, -n2 : n2 + 1]
+    near = (dy2**2 + dx2**2) <= n2**2
+    dy2, dx2 = dy2[near], dx2[near]
+    touched = np.zeros(len(problem.capacity), dtype=np.int64)  # último aceite que alterou o entorno
+
+    def invalidate(k: int, when: int) -> None:
+        r0, c0 = divmod(k, W)
+        rr, cc = r0 + dy2, c0 + dx2
+        ok = (rr >= 0) & (rr < H) & (cc >= 0) & (cc < W)
+        touched[rr[ok] * W + cc[ok]] = when
+
+    # entradas da fila: (−ganho por árvore, célula, aceite em que foi avaliada, nº de árvores avaliado)
+    heap, n_eval = [], 0
     for k in range(0, len(pool), batch):
         chunk = pool[k : k + batch]
         adds = np.minimum(step, problem.capacity[chunk])
         for j, a, res in zip(chunk, adds, problem.local_gains(chunk, adds)):
-            heap.append((-res[0] / a, int(j), 0))
-            last[int(j)] = (int(a), *res)
+            heap.append((-res[0] / a, int(j), 0, int(a)))
         n_eval += len(chunk)
     heapq.heapify(heap)
     if verbose:
         print(f"  ganhos iniciais exatos: {n_eval:,} avaliações em {time.perf_counter() - t_start:.0f} s")
 
     placed, n_accept, total = 0, 0, 0.0
+    history = [(0, 0.0)]
+    last = {}  # propostas do último lote reavaliado (guarda só ele: cada uma tem ~1.257 linhas de features)
     while placed < budget and heap:
-        neg, j, stamp = heapq.heappop(heap)
+        neg, j, stamp, a_eval = heapq.heappop(heap)
         free = int(problem.capacity[j] - problem.trees[j])
         if free <= 0:
             continue
         add = min(step, free, budget - placed)
-        if stamp == n_accept and last.get(j, (None,))[0] == add:
+        if stamp >= touched[j] and a_eval == add:
             if -neg <= 0:  # nenhuma ação restante resfria segundo o modelo
-                heapq.heappush(heap, (neg, j, stamp))
+                heapq.heappush(heap, (neg, j, stamp, a_eval))
                 break
-            _, gain, idx, Xn, p = last.pop(j)
+            cached = last.get(j)
+            if cached is not None and cached[0] == stamp and cached[1] == add:
+                _, _, gain, idx, Xn, p = cached
+            else:  # válida, mas avaliada num lote antigo: refaz a proposta (mesmo ganho, por construção)
+                gain, idx, Xn, p = problem.local_gains([j], [add])[0]
+                n_eval += 1
             problem.commit(j, add, idx, Xn, p)
             placed += add
             total += gain
             n_accept += 1
+            invalidate(j, n_accept)
+            last.clear()
+            history.append((placed, total))
             if problem.trees[j] < problem.capacity[j]:
-                heapq.heappush(heap, (neg, j, -1))  # ganho antigo como estimativa; será reavaliado
+                heapq.heappush(heap, (neg, j, -1, add))  # ganho antigo como estimativa; será reavaliado
             if verbose and n_accept % 200 == 0:
                 print(f"  {placed:,}/{budget:,} árvores, Σ ΔT={total:.1f} °C·célula, {n_eval:,} avaliações")
         else:
-            gain, idx, Xn, p = problem.local_gains([j], [add])[0]
-            n_eval += 1
-            last[j] = (add, gain, idx, Xn, p)
-            heapq.heappush(heap, (-gain / add, j, n_accept))
+            # reavalia em lote os itens desatualizados do topo: cada predict tem custo fixo alto
+            group = [(j, add)]
+            while heap and len(group) < reeval_batch and heap[0][2] < touched[heap[0][1]]:
+                _, j2, _, _ = heapq.heappop(heap)
+                free2 = int(problem.capacity[j2] - problem.trees[j2])
+                if free2 > 0:
+                    group.append((j2, min(step, free2, budget - placed)))
+            cells, adds = zip(*group)
+            last.clear()
+            for jj, aa, (gain, idx, Xn, p) in zip(cells, adds, problem.local_gains(cells, adds)):
+                last[jj] = (n_accept, aa, gain, idx, Xn, p)
+                heapq.heappush(heap, (-gain / aa, jj, n_accept, aa))
+            n_eval += len(group)
 
     # se o ganho exato zerou antes do fim do orçamento, completa pela ordem da pré-seleção
     fallback = 0
@@ -330,7 +415,7 @@ def lazy_greedy(problem: AllocationProblem, budget: int, step: int = 5, pool_siz
 
     return AllocationResult("Lazy Greedy", problem.trees.copy(), time.perf_counter() - t_start,
                             predicted_gain=total, n_evaluations=n_eval, pool_size=len(pool),
-                            fallback_trees=fallback)
+                            fallback_trees=fallback, history=history)
 
 
 def _fill_in_order(problem: AllocationProblem, cells: np.ndarray, budget: int) -> np.ndarray:

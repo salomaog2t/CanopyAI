@@ -10,3 +10,8 @@ scipy>=1.11
 
 # Passo 3 — modelos de LST e otimização (sem PyTorch: o disco C: é limitado)
 scikit-learn>=1.4
+
+# Passo 4 — interface web
+streamlit>=1.40
+folium>=0.17
+streamlit-folium>=0.22

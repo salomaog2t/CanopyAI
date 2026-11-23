@@ -5,6 +5,7 @@ Para qualquer bbox (WGS84), baixa do Earth Engine uma grade regular em UTM com a
 
     LST, NDVI, NDBI   composto mediano da estação seca (Landsat 8/9 C2 L2)
     elevation         SRTM GL1 (30 m), reamostragem bilinear
+    population        pessoas por célula (WorldPop GP 100 m R2025A, 2025, redistribuído por densidade)
     tree_frac         fração de árvore      (ESA WorldCover v200, classe 10) em cada célula
     built_frac        fração construída     (classe 50)
     water_frac        fração de água        (classe 80)
@@ -61,9 +62,11 @@ DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "cache"
 
 # Incremente sempre que mudar o processamento no servidor (máscaras, bandas, reamostragem):
 # isso muda o hash e invalida o cache antigo, em vez de misturar versões.
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 3  # v2: + population (WorldPop); v3: WorldPop R2025A, ano 2025
 
-BANDS = ("LST", "NDVI", "NDBI", "elevation", "tree_frac", "built_frac", "water_frac", "clear_obs")
+BANDS = ("LST", "NDVI", "NDBI", "elevation", "tree_frac", "built_frac", "water_frac", "clear_obs", "population")
+WORLDPOP_ASSET = "WorldPop/GP/100m/R2025A/v1/pop"  # substitui o antigo WorldPop/GP/100m/pop (obsoleto)
+WORLDPOP_YEAR = 2025  # mesma janela do composto Landsat (2022–2025); a série vai até 2030 (projeções)
 NODATA = -9999.0
 TILE_PX = 512                 # 512×512 px × 8 bandas float32 ≈ 8 MB por requisição (limite do GEE: 48 MB)
 MAX_WORKERS = 4               # requisições simultâneas ao computePixels
@@ -215,8 +218,18 @@ def build_image(bbox, params: ExtractParams, crs: str) -> tuple[ee.Image, ee.Ima
     )
     elevation = ee.Image("USGS/SRTMGL1_003").select("elevation").resample("bilinear")
 
+    # WorldPop: pessoas por célula de ~100 m → densidade (pessoas/m²) × área da célula de 30 m
+    pop_tiles = ee.ImageCollection(WORLDPOP_ASSET).filterBounds(aoi).filter(ee.Filter.eq("year", WORLDPOP_YEAR))
+    pop_proj = pop_tiles.first().projection()
+    population = (
+        pop_tiles.mosaic().setDefaultProjection(pop_proj)
+        .divide(ee.Image.pixelArea().reproject(pop_proj))
+        .multiply(scale * scale)
+        .rename("population")
+    )
+
     image = (
-        ee.Image.cat(composite, elevation, fractions, clear_obs)
+        ee.Image.cat(composite, elevation, fractions, clear_obs, population)
         .select(list(BANDS))
         .toFloat()
         .unmask(NODATA, sameFootprint=False)
@@ -304,6 +317,7 @@ def _to_dataframe(arrays: dict[str, np.ndarray], grid: dict) -> pd.DataFrame:
     for b in BANDS:
         df[b] = arrays[b].ravel()
     df["clear_obs"] = df["clear_obs"].fillna(0).astype(np.int16)
+    df["population"] = df["population"].fillna(0.0)  # fora da cobertura do WorldPop (p.ex. água) = 0
     df["is_water"] = (df["water_frac"] >= WATER_THRESHOLD).to_numpy()
     return df
 

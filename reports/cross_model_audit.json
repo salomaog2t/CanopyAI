@@ -1,0 +1,134 @@
+{
+  "created_utc": "2026-11-23T20:49:07+00:00",
+  "bbox": [
+    -46.75,
+    -23.65,
+    -46.55,
+    -23.5
+  ],
+  "budget": 5000,
+  "cache": "grid_3bd5a66c269a64a7.parquet",
+  "n_train": 335561,
+  "n_train_m2_alt": 165657,
+  "table": {
+    "M2|Greedy-M2": {
+      "soma_dT": 16694.28756342583,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 2.3430750793934463
+    },
+    "M2|Greedy-M1": {
+      "soma_dT": 2718.202480542048,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 0.38150489912829505
+    },
+    "M2|Mais quente primeiro": {
+      "soma_dT": 6059.675456336594,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 0.8504870002395454
+    },
+    "M2|Aleatória": {
+      "soma_dT": 7124.9477706653315,
+      "soma_dT_sd": 190.13778915123376,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 1.0
+    },
+    "M1|Greedy-M2": {
+      "soma_dT": 895.9593980978958,
+      "aquecimento_max": 0.8927665221582977,
+      "celulas_aquecidas": 5925,
+      "vs_aleatoria": 1.1970710283460841
+    },
+    "M1|Greedy-M1": {
+      "soma_dT": 1184.053150170684,
+      "aquecimento_max": 1.2504159145848446,
+      "celulas_aquecidas": 3958,
+      "vs_aleatoria": 1.5819865555295747
+    },
+    "M1|Mais quente primeiro": {
+      "soma_dT": 841.2207269279245,
+      "aquecimento_max": 0.7239506658024126,
+      "celulas_aquecidas": 3706,
+      "vs_aleatoria": 1.123935931457937
+    },
+    "M1|Aleatória": {
+      "soma_dT": 748.4596794024704,
+      "soma_dT_sd": 7.941340180224518,
+      "aquecimento_max": 1.335643981332211,
+      "celulas_aquecidas": 9502,
+      "vs_aleatoria": 1.0
+    },
+    "M2-alt|Greedy-M2": {
+      "soma_dT": 14333.912938047546,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 2.270604713009967
+    },
+    "M2-alt|Greedy-M1": {
+      "soma_dT": 2897.3315286409934,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 0.45896013548556625
+    },
+    "M2-alt|Mais quente primeiro": {
+      "soma_dT": 6254.636889755245,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 0.9907837491008733
+    },
+    "M2-alt|Aleatória": {
+      "soma_dT": 6312.8173987827995,
+      "soma_dT_sd": 106.8646416094965,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 1.0
+    },
+    "M1-sinal|Greedy-M2": {
+      "soma_dT": 1164.7631752288562,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 1.1930824900537234
+    },
+    "M1-sinal|Greedy-M1": {
+      "soma_dT": 1182.9126822973471,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 1.2116732727527628
+    },
+    "M1-sinal|Mais quente primeiro": {
+      "soma_dT": 1072.4185454090675,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 1.0984926513366509
+    },
+    "M1-sinal|Aleatória": {
+      "soma_dT": 976.2637411403197,
+      "soma_dT_sd": 9.903573825947165,
+      "aquecimento_max": 0.0,
+      "celulas_aquecidas": 0,
+      "vs_aleatoria": 1.0
+    }
+  },
+  "greedy_m2_vs_random": {
+    "M2": 2.3430750793934463,
+    "M1": 1.1970710283460841,
+    "M2-alt": 2.270604713009967,
+    "M1-sinal": 1.1930824900537234
+  },
+  "greedy_m2_over_greedy_m1_in_m1": 0.7566884966006309,
+  "fraction_of_advantage_retained_in_m1": 0.14673120763664568,
+  "spearman_cooling_map_m2_vs_m1": 0.4667493965554412,
+  "spearman_cooling_map_m2_vs_m2alt": 0.6566183395786097,
+  "jaccard_planted_cells_greedy_m2_vs_m1": 0.0030643513789581204,
+  "robust": false,
+  "robust_threshold": 1.5,
+  "r2_in_sample_linear": {
+    "M1": 0.4346893705671214,
+    "M1-sinal": 0.4093568707059573
+  },
+  "post_hoc_sign_linear_ratio": 1.1930824900537234,
+  "runtime_s": 563.1903920999994
+}
