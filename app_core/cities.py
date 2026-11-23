@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from gee.extract import ExtractParams, cache_path
+from gee.extract import ExtractParams, find_cached
 
 # Custom areas: above this size the Earth Engine request and the optimizer get slow, and a
 # free-tier quota can be eaten quickly. ~100 km² ≈ 110k cells ≈ 20 s download.
@@ -25,7 +25,7 @@ class City:
 
     @property
     def is_cached(self) -> bool:
-        return cache_path(self.bbox, self.params).exists()
+        return find_cached(self.bbox, self.params) is not None
 
 
 CITIES = [

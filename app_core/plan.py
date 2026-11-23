@@ -15,7 +15,7 @@ import pandas as pd
 from sklearn.metrics import r2_score
 
 from app_core.geo import cell_lonlat, utm_to_lonlat
-from gee.extract import DEFAULT_CACHE_DIR, GridData
+from gee.extract import DEFAULT_CACHE_DIR, DEMO_DIR, GridData
 from models.lst_model import FEATURES, TARGET, build_feature_frame, fit_lst_model, training_data
 from optimize.allocate import (
     AllocationProblem,
@@ -69,7 +69,10 @@ def _plan_key(grid: GridData, params: PlanParams) -> str:
 
 
 def plan_cache_path(grid: GridData, params: PlanParams):
-    return PLAN_CACHE_DIR / f"plan_{_plan_key(grid, params)}.npz"
+    """Plano em cache: o local (data/cache/plans) ou o de demo versionado (data/demo/plans)."""
+    name = f"plan_{_plan_key(grid, params)}.npz"
+    demo = DEMO_DIR / "plans" / name
+    return demo if demo.exists() else PLAN_CACHE_DIR / name
 
 
 def _metrics(ev: dict) -> dict:

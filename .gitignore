@@ -5,6 +5,7 @@
 *.json.key
 service-account*.json
 credentials*.json
+.streamlit/secrets.toml
 
 # --- Python ---
 __pycache__/

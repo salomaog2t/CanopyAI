@@ -1,17 +1,20 @@
-# Passo 1 — conexão com o Google Earth Engine e checagem de sanidade
-earthengine-api>=1.4
-python-dotenv>=1.0
+# CanopyAI — exact versions tested together (Windows, Python 3.14) and checked for Linux wheels.
+# Pure-Python or manylinux wheels only: no Windows-specific packages.
 
-# Passo 2 — grade de 30 m, cache em Parquet e features de vizinhança
-numpy>=1.26
-pandas>=2.1
-pyarrow>=15
-scipy>=1.11
+# Earth Engine access (Steps 1–2; in the app, only for custom areas)
+earthengine-api==1.7.53
+python-dotenv==1.2.4
 
-# Passo 3 — modelos de LST e otimização (sem PyTorch: o disco C: é limitado)
-scikit-learn>=1.4
+# Grid, cache and neighbourhood features (Step 2)
+numpy==2.5.5
+pandas==3.1.1
+pyarrow==26.0.1
+scipy==1.18.1
 
-# Passo 4 — interface web
-streamlit>=1.40
-folium>=0.17
-streamlit-folium>=0.22
+# LST models and optimization (Step 3) — scikit-learn only, no deep-learning stack
+scikit-learn==1.9.1
+
+# Web app (Step 4)
+streamlit==1.67.0
+folium==1.0.0
+streamlit-folium==0.28.0

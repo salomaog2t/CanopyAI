@@ -9,6 +9,7 @@ Pré-processamento Landsat 8/9 (Collection 2, Level 2) compartilhado pelos passo
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -46,18 +47,52 @@ def resolve_project(project: str | None = None) -> str:
     return project
 
 
+def _service_account_credentials():
+    """Conta de serviço a partir de GEE_SERVICE_ACCOUNT_JSON (o JSON da chave, como texto), se houver."""
+    raw = os.getenv("GEE_SERVICE_ACCOUNT_JSON", "").strip()
+    if not raw:
+        return None
+    email = json.loads(raw)["client_email"]
+    return ee.ServiceAccountCredentials(email, key_data=raw)
+
+
+def has_ee_credentials() -> bool:
+    """True se há conta de serviço configurada ou credenciais de usuário salvas por `earthengine authenticate`."""
+    if os.getenv("GEE_SERVICE_ACCOUNT_JSON", "").strip():
+        return True
+    try:
+        return Path(ee.oauth.get_credentials_path()).exists()
+    except Exception:
+        return False
+
+
 def init_earth_engine(project: str | None = None, verbose: bool = True) -> str:
-    """Inicializa o Earth Engine uma única vez por processo."""
+    """
+    Inicializa o Earth Engine uma única vez por processo.
+
+    Ordem: conta de serviço (GEE_SERVICE_ACCOUNT_JSON, usada no deploy) → credenciais de usuário
+    salvas → fluxo de login no navegador. O login no navegador é desligado quando
+    CANOPYAI_HEADLESS=1 (servidores, como o app web), onde ele travaria esperando alguém.
+    """
     global _initialized_project
     project = resolve_project(project)
     if _initialized_project == project:
         return project
-    try:
-        ee.Initialize(project=project)
-    except Exception:
-        print("Credenciais do Earth Engine não encontradas — abrindo fluxo de autenticação...")
-        ee.Authenticate()
-        ee.Initialize(project=project)
+    credentials = _service_account_credentials()
+    if credentials is not None:
+        ee.Initialize(credentials=credentials, project=project)
+    else:
+        try:
+            ee.Initialize(project=project)
+        except Exception:
+            if os.getenv("CANOPYAI_HEADLESS") == "1":
+                raise RuntimeError(
+                    "Earth Engine sem credenciais: rode `earthengine authenticate` ou configure "
+                    "GEE_SERVICE_ACCOUNT_JSON (veja DEPLOY.md)."
+                )
+            print("Credenciais do Earth Engine não encontradas — abrindo fluxo de autenticação...")
+            ee.Authenticate()
+            ee.Initialize(project=project)
     _initialized_project = project
     if verbose:
         print(f"[ok] Earth Engine inicializado no projeto '{project}'.")

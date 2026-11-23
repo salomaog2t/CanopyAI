@@ -58,7 +58,8 @@ from gee.landsat import (
     worldcover,
 )
 
-DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "cache"
+DEFAULT_CACHE_DIR = PROJECT_ROOT / "data" / "cache"   # local, fora do git
+DEMO_DIR = PROJECT_ROOT / "data" / "demo"              # versionado: cidades de demonstração do app
 
 # Incremente sempre que mudar o processamento no servidor (máscaras, bandas, reamostragem):
 # isso muda o hash e invalida o cache antigo, em vez de misturar versões.
@@ -143,6 +144,15 @@ def cache_key(bbox, params: ExtractParams) -> str:
 
 def cache_path(bbox, params: ExtractParams, cache_dir: Path = DEFAULT_CACHE_DIR) -> Path:
     return Path(cache_dir) / f"grid_{cache_key(bbox, params)}.parquet"
+
+
+def find_cached(bbox, params: ExtractParams, cache_dir: Path = DEFAULT_CACHE_DIR) -> Path | None:
+    """Arquivo em cache para a bbox: primeiro o cache local, depois os dados de demo versionados."""
+    for d in (Path(cache_dir), DEMO_DIR):
+        p = cache_path(bbox, params, d)
+        if p.exists():
+            return p
+    return None
 
 
 def load_grid(path: Path) -> GridData:
@@ -339,15 +349,16 @@ def extract_grid(
     params = params or ExtractParams()
     bbox = normalize_bbox(bbox)
     path = cache_path(bbox, params, cache_dir)
+    found = None if refresh else find_cached(bbox, params, cache_dir)
 
-    if path.exists() and not refresh:
+    if found is not None:
         try:
-            grid = load_grid(path)
+            grid = load_grid(found)
             if verbose:
-                print(f"[cache] {path.name} ({grid.shape[0]}×{grid.shape[1]} px) — nenhuma chamada ao GEE.")
+                print(f"[cache] {found.name} ({grid.shape[0]}×{grid.shape[1]} px) — nenhuma chamada ao GEE.")
             return grid
         except Exception as exc:  # arquivo corrompido ou de outra versão: baixa de novo
-            print(f"[cache] {path.name} inválido ({exc}); baixando novamente.")
+            print(f"[cache] {found.name} inválido ({exc}); baixando novamente.")
 
     init_earth_engine(project, verbose=verbose)
     crs = utm_epsg(bbox)

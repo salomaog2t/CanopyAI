@@ -9,11 +9,14 @@ Para cada cidade de app_core/cities.py:
 Uso:
   python scripts/precache_cities.py            # todas as cidades
   python scripts/precache_cities.py --no-plans # só os dados
+  python scripts/precache_cities.py --export-demo  # copia grades + planos padrão para data/demo (versionado,
+                                                   # é o que o deploy na nuvem usa)
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -21,13 +24,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from app_core.cities import CITIES  # noqa: E402
-from app_core.plan import PlanParams, prepare_area, run_plan  # noqa: E402
-from gee.extract import extract_grid  # noqa: E402
+from app_core.plan import PlanParams, plan_cache_path, prepare_area, run_plan  # noqa: E402
+from gee.extract import DEMO_DIR, extract_grid  # noqa: E402
+
+
+def _copy(src: Path, dest_dir: Path) -> None:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    if src.parent.resolve() != dest_dir.resolve():
+        shutil.copy2(src, dest_dir / src.name)
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--no-plans", action="store_true")
+    p.add_argument("--export-demo", action="store_true", help="copia os resultados para data/demo")
     args = p.parse_args()
 
     for city in CITIES:
@@ -50,6 +60,10 @@ def main() -> int:
                        ("Lazy Greedy", "Random", "Hottest first"))
             src = "cache" if res["from_cache"] else f"{res['runtime_s']:.0f} s"
             print(f"  plano [{objective}]: greedy {g / r:.2f}× aleatória, {g / h:.2f}× mais quente ({src})")
+            if args.export_demo:
+                _copy(plan_cache_path(grid, PlanParams(objective=objective)), DEMO_DIR / "plans")
+        if args.export_demo:
+            _copy(grid.path, DEMO_DIR)
         print(f"  total {time.perf_counter() - t0:.0f} s")
     return 0
 

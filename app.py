@@ -34,11 +34,31 @@ from app_core.plan import (  # noqa: E402
     prepare_area,
     run_plan,
 )
-from gee.extract import ExtractParams, cache_path, extract_grid  # noqa: E402
+from gee.extract import ExtractParams, extract_grid, find_cached  # noqa: E402
+from gee.landsat import has_ee_credentials  # noqa: E402
 from models.lst_model import TARGET  # noqa: E402
 
 st.set_page_config(page_title="CanopyAI · Tree Planting Optimizer", page_icon="🌳", layout="wide")
 load_dotenv(ROOT / ".env")
+os.environ["CANOPYAI_HEADLESS"] = "1"  # a web server must never wait for a browser login
+
+
+def _load_secrets() -> None:
+    """Streamlit Community Cloud: copy st.secrets into the env vars the Earth Engine code reads."""
+    try:
+        secrets = st.secrets
+        if "gcp_service_account" in secrets:
+            os.environ["GEE_SERVICE_ACCOUNT_JSON"] = json.dumps(dict(secrets["gcp_service_account"]))
+        for name in ("GEE_PROJECT_ID", "CANOPYAI_ALLOW_CUSTOM", "CANOPYAI_MAX_DOWNLOADS"):
+            if name in secrets:
+                os.environ[name] = str(secrets[name])
+    except Exception:  # no secrets.toml locally: .env is used instead
+        pass
+
+
+_load_secrets()
+ALLOW_CUSTOM = os.getenv("CANOPYAI_ALLOW_CUSTOM", "1") != "0"
+MAX_DOWNLOADS = int(os.getenv("CANOPYAI_MAX_DOWNLOADS", "3"))  # new Earth Engine areas per browser session
 
 LST_STOPS = ["#2166ac", "#67a9cf", "#d1e5f0", "#f7f7f7", "#fddbc7", "#ef8a62", "#b2182b"]
 COOL_STOPS = ["#c6dbef", "#6baed6", "#2171b5", "#08306b"]
@@ -101,7 +121,21 @@ def add_raster(m, rgba, bounds, name, show=True):
                                       interactive=False, zindex=2).add_to(m)
 
 
+LEGEND_CSS = """
+<style>
+  /* branca draws the colour bar inside <div class="legend leaflet-control">; the white card keeps
+     the black ticks and caption readable over the dark satellite basemap */
+  .legend.leaflet-control {
+    background-color: rgba(255, 255, 255, 0.88);
+    padding: 6px 10px;
+    border-radius: 6px;
+  }
+</style>
+"""
+
+
 def legend(m, stops, vmin, vmax, caption):
+    m.get_root().header.add_child(folium.Element(LEGEND_CSS))
     LinearColormap(stops, vmin=vmin, vmax=vmax, caption=caption).add_to(m)
 
 
@@ -211,26 +245,35 @@ if source == "Custom area":
     if drawn:
         area_km2 = bbox_area_km2(drawn)
         too_big = area_km2 > MAX_CUSTOM_AREA_KM2
-        cached = cache_path(drawn, ExtractParams(months=tuple(season))).exists()
-        has_project = bool(os.getenv("GEE_PROJECT_ID", "").strip())
+        cached = find_cached(drawn, ExtractParams(months=tuple(season))) is not None
+        can_download = bool(os.getenv("GEE_PROJECT_ID", "").strip()) and has_ee_credentials() and ALLOW_CUSTOM
+        used = st.session_state.get("downloads", 0)
         msg = f"Selected **{area_km2:.1f} km²** · bbox `{drawn}`"
+        blocked = too_big
         if too_big:
             c1.error(f"{msg} — larger than the {MAX_CUSTOM_AREA_KM2:.0f} km² limit that protects the "
                      "Earth Engine quota. Draw a smaller rectangle.")
         elif cached:
             c1.success(f"{msg} — already cached, no Earth Engine call needed.")
-        elif not has_project:
-            c1.warning(f"{msg} — set GEE_PROJECT_ID in .env to download new areas.")
+        elif not can_download:
+            blocked = True
+            c1.warning(f"{msg} — downloading new areas is not enabled on this deployment "
+                       "(Earth Engine credentials not configured). The preloaded cities still work.")
+        elif used >= MAX_DOWNLOADS:
+            blocked = True
+            c1.warning(f"{msg} — this session already used its {MAX_DOWNLOADS} new-area downloads.")
         else:
-            c1.info(f"{msg} — about {area_km2 / 100 * 20:.0f}–{area_km2 / 100 * 40:.0f} s to download.")
-        if c2.button("Load this area", type="primary", width="stretch",
-                     disabled=too_big or (not cached and not has_project)):
+            c1.info(f"{msg} — about {area_km2 / 100 * 20:.0f}–{area_km2 / 100 * 40:.0f} s to download "
+                    f"({MAX_DOWNLOADS - used} download(s) left in this session).")
+        if c2.button("Load this area", type="primary", width="stretch", disabled=blocked):
             with st.spinner("Downloading the 30 m grid from Google Earth Engine…" if not cached else "Loading…"):
                 try:
                     load_grid(drawn, (2022, 2025), tuple(season))
                 except Exception as exc:  # GEE errors must not crash the app
                     st.error(f"Earth Engine request failed: {exc}")
                 else:
+                    if not cached:
+                        st.session_state["downloads"] = used + 1
                     st.session_state["custom_bbox"] = {"bbox": drawn, "months": tuple(season)}
                     st.rerun()
     else:
