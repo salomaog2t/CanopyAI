@@ -23,6 +23,7 @@ env/
 # --- Data & outputs (large rasters / exports never go to git) ---
 data/raw/
 data/interim/
+data/cache/
 outputs/
 *.tif
 *.tiff

@@ -29,20 +29,23 @@ from pathlib import Path
 import ee
 from dotenv import load_dotenv
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from gee.landsat import (  # noqa: E402
+    WORLDCOVER_WATER,
+    dry_season_composite,
+    init_earth_engine,
+    landsat_collection,
+    worldcover,
+)
+
 # ---------------------------------------------------------------------------
 # Padrões (sobrescritos por .env ou argumentos de linha de comando)
 # ---------------------------------------------------------------------------
 DEFAULT_BBOX = (-46.75, -23.65, -46.55, -23.50)  # centro expandido de São Paulo
 DEFAULT_MONTHS = (6, 9)                            # jun–set (estação seca)
 DEFAULT_YEARS = (2022, 2025)                       # Landsat 9 operacional desde 2022
-MAX_SCENE_CLOUD = 60                               # % de nuvem por cena (pré-filtro)
 SAMPLE_PIXELS = 5000
 SCALE_M = 30
-WORLDCOVER_WATER = 80
-
-# Bits do QA_PIXEL (Landsat C2 L2): 0 fill, 1 dilated cloud, 2 cirrus,
-# 3 cloud, 4 cloud shadow, 5 snow
-QA_MASK_BITS = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5)
 
 
 # ---------------------------------------------------------------------------
@@ -91,74 +94,14 @@ def load_config() -> argparse.Namespace:
     return args
 
 
-def init_earth_engine(project: str) -> None:
-    try:
-        ee.Initialize(project=project)
-    except Exception:
-        print("Credenciais do Earth Engine não encontradas — abrindo fluxo de autenticação...")
-        ee.Authenticate()
-        ee.Initialize(project=project)
-    print(f"[ok] Earth Engine inicializado no projeto '{project}'.")
-
-
-# ---------------------------------------------------------------------------
-# Pré-processamento Landsat
-# ---------------------------------------------------------------------------
-def mask_and_scale(img: ee.Image) -> ee.Image:
-    """Aplica máscara QA_PIXEL/QA_RADSAT e fatores de escala do USGS C2 L2."""
-    qa = img.select("QA_PIXEL")
-    clear = qa.bitwiseAnd(QA_MASK_BITS).eq(0)
-    unsaturated = img.select("QA_RADSAT").eq(0)
-
-    optical = img.select("SR_B.").multiply(0.0000275).add(-0.2)
-    lst_c = img.select("ST_B10").multiply(0.00341802).add(149.0).subtract(273.15).rename("LST")
-
-    return (
-        img.addBands(optical, None, True)
-        .addBands(lst_c)
-        .updateMask(clear)
-        .updateMask(unsaturated)
-        .copyProperties(img, ["system:time_start"])
-    )
-
-
-def add_indices(img: ee.Image) -> ee.Image:
-    # Landsat 8/9 OLI: B4 = red, B5 = NIR, B6 = SWIR1
-    ndvi = img.normalizedDifference(["SR_B5", "SR_B4"]).rename("NDVI")
-    ndbi = img.normalizedDifference(["SR_B6", "SR_B5"]).rename("NDBI")
-    return img.addBands([ndvi, ndbi])
-
-
-def month_filter(start: int, end: int) -> ee.Filter:
-    if start <= end:
-        return ee.Filter.calendarRange(start, end, "month")
-    # estação que cruza a virada do ano (ex.: nov–fev)
-    return ee.Filter.Or(
-        ee.Filter.calendarRange(start, 12, "month"),
-        ee.Filter.calendarRange(1, end, "month"),
-    )
-
-
 def build_dry_season_composite(aoi: ee.Geometry, years: tuple[int, int], months: tuple[int, int]):
-    collection = (
-        ee.ImageCollection("LANDSAT/LC08/C02/T1_L2")
-        .merge(ee.ImageCollection("LANDSAT/LC09/C02/T1_L2"))
-        .filterBounds(aoi)
-        .filter(ee.Filter.calendarRange(years[0], years[1], "year"))
-        .filter(month_filter(*months))
-        .filter(ee.Filter.lt("CLOUD_COVER", MAX_SCENE_CLOUD))
-        .map(mask_and_scale)
-        .map(add_indices)
-    )
-
-    bands = ["NDVI", "NDBI", "LST"]
-    composite = collection.select(bands).median().clip(aoi)
-    clear_obs = collection.select("LST").count().rename("clear_obs").clip(aoi)
+    collection = landsat_collection(aoi, years, months)
+    composite, clear_obs = dry_season_composite(collection)
+    composite = composite.clip(aoi)
+    clear_obs = clear_obs.clip(aoi)
 
     # Máscara de água permanente (ESA WorldCover 10 m, classe 80)
-    worldcover = ee.ImageCollection("ESA/WorldCover/v200").first().select("Map")
-    not_water = worldcover.neq(WORLDCOVER_WATER)
-    composite = composite.updateMask(not_water)
+    composite = composite.updateMask(worldcover().neq(WORLDCOVER_WATER))
 
     return collection, composite, clear_obs
 
