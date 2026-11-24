@@ -94,6 +94,16 @@ st.markdown(
       #MainMenu, footer, header [data-testid="stToolbar"], [data-testid="stDeployButton"],
       [data-testid="stStatusWidget"] { visibility: hidden; height: 0; }
       header[data-testid="stHeader"] { background: transparent; }
+      /* Community Cloud viewer badge: these hashed class names come from Streamlit's own markup and
+         can change between releases. If the badge is drawn in the hosting page (outside the app's
+         iframe), CSS from the app cannot reach it. */
+      [data-testid="stStatusWidget"],
+      [data-testid="stToolbar"],
+      [data-testid="stDecoration"],
+      .viewerBadge_container__r5tak,
+      .styles_viewerBadge__CvC9N {
+        display: none !important;
+      }
 
       /* KPI cards */
       div[data-testid="stMetric"] {
